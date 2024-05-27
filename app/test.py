@@ -1,10 +1,17 @@
-from python_on_whales import DockerClient
+def calculate_sum(max_num, num_list):
+    total_sum = 0
+    for num in num_list:
+        if num <= max_num:
+            total_sum += 2 ** (num - 1)
+    return total_sum
 
-docker = DockerClient(compose_files=["../submission/testing-challange/docker-compose.yml"])
-
-docker.compose.build()
-docker.compose.up(detach=True)
-# docker.compose.down()
+# Test cases
+print(calculate_sum(3, [1, 2, 3]))  # Output: 7
+print(calculate_sum(3, [1, 2]))     # Output: 3
+print(calculate_sum(3, [1, 3]))     # Output: 5
+print(calculate_sum(10, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))  # Output: 1023
+print(calculate_sum(10, [1, 2, 3, 4, 6]))
+print(calculate_sum(10, [1, 2, 3, 4, 5, 6, 7, 8, 9]))
 
 '''
 docker run -d --name app_con testing-challange-app

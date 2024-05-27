@@ -7,20 +7,34 @@ from pydantic import BaseModel
 import os
 import shutil
 import time
+from datetime import datetime
 import requests
 import json
+import importlib.util
+import pymysql
+from dotenv import load_dotenv
 
 '''
 TODO:
 - ✅ buat mekanisme update app.js / main.py / dll (yang gw kepikiran sekarang kita buat .txt yang isinya nama file yang perlu diganti (pake txt aja biar kita nga perlu buat kolom baru di ERD :) ))
-- jalanin testing payload
-- ngitung performance (waktu build n testing)
+- ✅ jalanin testing payload
+- ✅ ngitung performance (waktu build n testing)
 - ✅ buat async sehingga bisa sekaligus beberapa (ini rada low prioritynya, karna yang penting adalah functionallity nya jalan dulu)
+- nyimpen log file
 '''
+
+load_dotenv()
+MYSQL_HOST = os.getenv('MYSQL_HOST')
+MYSQL_USER = os.getenv('MYSQL_USER')
+MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
+MYSQL_DB = os.getenv('MYSQL_DB')
+MYSQL_PORT = int(os.getenv('MYSQL_PORT'))
 
 class Submission(BaseModel):
     id: str
     challenge_id: str
+    user_id: str
+    test_case_total: int
 
 app = FastAPI()
 
@@ -49,10 +63,89 @@ def get_dir_data(file_path):
             second_line = file.readline().strip()
             return first_line, second_line
     except FileNotFoundError:
-        print(f"File not found: {file_path}")
+        # print(f"File not found: {file_path}")
         return None, None
 
-def build_and_run_docker(challenge_id: str, submission_id: str, destination_dir: str):
+def get_pass_test_case_value(max_num, num_list):
+    total_sum = 0
+    for num in num_list:
+        if num <= max_num:
+            total_sum += 2 ** (num - 1)
+    return total_sum
+
+def execute_query(query, params):
+    connection = pymysql.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DB,
+        port=MYSQL_PORT
+    )
+    
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+        connection.commit()  # Commit the transaction
+    except Exception as e:
+        print("Error executing query:", e)
+    finally:
+        connection.close()
+
+def insert_submission(submission_id: str, user_id: str, challenge_id: str, status: bool, passed_test_case_value: int, log_file_path: str = None):
+    query = 'INSERT INTO submission (submission_id, user_id, challenge_id, status, passed_test_case_value) VALUES (%s, %s, %s, %s, %s);'
+    params = (submission_id, user_id, challenge_id, status, passed_test_case_value)
+
+    try:
+        execute_query(query, params)
+    except Exception as e:
+        print(f"Error: {e}")
+    return
+    
+def run_tests(submission: Submission, port: int):
+    submission_id = submission.id
+    user_id = submission.user_id
+    challenge_id = submission.challenge_id
+    test_case_total = submission.test_case_total
+
+    checker_path = os.path.join("challenges", challenge_id, "checker.py")
+    if not os.path.exists(checker_path):
+        return None
+    
+    spec = importlib.util.spec_from_file_location("checker", checker_path)
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    
+    test_cases = checker.test_cases
+    passed_test_case = []
+
+
+    time.sleep(10)
+    for idx, test in enumerate(test_cases):
+        checking_method = test['checking_method']
+        # checking_method = response_based_check
+        url = test['url']
+        url = url.replace("(port)", str(port))
+        header = test['header']
+        method = test['method']
+        body = test['body']
+        expected = test['expected']
+
+        if checking_method(body, url, header, method, expected):
+            passed_test_case.append(idx + 1)
+
+    passed_test_case_value = get_pass_test_case_value(test_case_total, passed_test_case)
+    if len(passed_test_case) == test_case_total:
+        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, log_file_path="")
+    elif len(passed_test_case) != len(test_cases):
+        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, log_file_path="")
+    else:
+        insert_submission(submission_id, user_id, challenge_id, 1, passed_test_case_value)
+    return
+
+
+def build_and_run_docker(submission: Submission, destination_dir: str):
+    submission_id = submission.id
+    start_time = time.time()
     # Create the Docker client and build the Docker image
     try:
         docker = DockerClient(compose_files=[os.path.join(destination_dir, "docker-compose.yml")])
@@ -78,9 +171,14 @@ def build_and_run_docker(challenge_id: str, submission_id: str, destination_dir:
     if not flag:
         raise HTTPException(status_code=500, detail="The application did not start successfully")
     
-    # Send the submission to the application
-    response_json = response.json()
-    print(response_json)
+    # Run test cases on the application
+    if flag:
+        run_tests(submission, port)
+    else:
+        print("Application did not start successfully") # UPDATE HERE LATER (TODO)
+
+    end_time = time.time()
+    print(f"Execution duration: {end_time - start_time:.2f}s")
 
     # Stop the container and remove the volume
     docker.compose.down(volumes=True, quiet=True)
@@ -95,11 +193,13 @@ async def root():
 async def create_submission(
     id: str = Form(...),
     challenge_id: str = Form(...),
+    user_id: str = Form(...),
+    test_case_total: int = Form(...),
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     # Create the Submission instance from form data
-    submission = Submission(id=id, challenge_id=challenge_id)
+    submission = Submission(id=id, challenge_id=challenge_id, user_id=user_id, test_case_total=test_case_total)
     submission_id = submission.id
     challenge_id = submission.challenge_id
     file_name = file.filename
@@ -135,7 +235,7 @@ async def create_submission(
 
     # Schedule long-running tasks in background
     background_tasks.add_task(
-        build_and_run_docker, challenge_id, submission_id, destination_dir
+        build_and_run_docker, submission, destination_dir
     )
 
     return {"message": "Submission creation started"}
