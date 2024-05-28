@@ -13,6 +13,7 @@ import json
 import importlib.util
 import pymysql
 from dotenv import load_dotenv
+import hashlib
 
 '''
 TODO:
@@ -20,7 +21,8 @@ TODO:
 - ✅ jalanin testing payload
 - ✅ ngitung performance (waktu build n testing)
 - ✅ buat async sehingga bisa sekaligus beberapa (ini rada low prioritynya, karna yang penting adalah functionallity nya jalan dulu)
-- nyimpen log file
+- ✅ store log file
+- endpoint return log files dari specific user
 '''
 
 load_dotenv()
@@ -37,6 +39,16 @@ class Submission(BaseModel):
     test_case_total: int
 
 app = FastAPI()
+
+def delete_images_by_name(image_name):
+    client = docker.from_env()
+
+    for image in client.images.list(all=True):
+        image_tags = image.tags
+        if f"{image_name}-app:latest" in image_tags:
+            client.images.remove(image.id, force=True)
+        if f"{image_name}-db:latest" in image_tags:
+            client.images.remove(image.id, force=True)
 
 def get_container_port(container_id: str):
     client = docker.from_env()
@@ -73,6 +85,26 @@ def get_pass_test_case_value(max_num, num_list):
             total_sum += 2 ** (num - 1)
     return total_sum
 
+def generate_log(container_id):
+    client = docker.from_env()
+
+    try:
+        container = client.containers.get(container_id)
+        logs = container.logs().decode('utf-8')
+        log_hash = hashlib.sha256(logs.encode()).hexdigest()
+        log_file_path = os.path.join("logs", f"{log_hash}.log")
+        if not os.path.exists(log_file_path):
+            with open(log_file_path, 'w') as log_file:
+                log_file.write(logs)
+    except docker.errors.NotFound:
+        return None
+    except Exception as e:
+        return None
+    return log_hash
+
+def save_log():
+    pass
+
 def execute_query(query, params):
     connection = pymysql.connect(
         host=MYSQL_HOST,
@@ -92,8 +124,12 @@ def execute_query(query, params):
         connection.close()
 
 def insert_submission(submission_id: str, user_id: str, challenge_id: str, status: bool, passed_test_case_value: int, log_file_path: str = None):
-    query = 'INSERT INTO submission (submission_id, user_id, challenge_id, status, passed_test_case_value) VALUES (%s, %s, %s, %s, %s);'
-    params = (submission_id, user_id, challenge_id, status, passed_test_case_value)
+    if log_file_path:
+        query = 'INSERT INTO submission (submission_id, user_id, challenge_id, status, passed_test_case_value, log_file_path) VALUES (%s, %s, %s, %s, %s, %s);'
+        params = (submission_id, user_id, challenge_id, status, passed_test_case_value, log_file_path)
+    else:
+        query = 'INSERT INTO submission (submission_id, user_id, challenge_id, status, passed_test_case_value) VALUES (%s, %s, %s, %s, %s);'
+        params = (submission_id, user_id, challenge_id, status, passed_test_case_value)
 
     try:
         execute_query(query, params)
@@ -134,10 +170,14 @@ def run_tests(submission: Submission, port: int):
             passed_test_case.append(idx + 1)
 
     passed_test_case_value = get_pass_test_case_value(test_case_total, passed_test_case)
-    if len(passed_test_case) == test_case_total:
-        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, log_file_path="")
+    if len(passed_test_case) == 0:
+        container_id = get_container_id(f"{submission_id}-app:latest")
+        logs_path = generate_log(container_id)
+        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, f"{logs_path}.log")
     elif len(passed_test_case) != len(test_cases):
-        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, log_file_path="")
+        container_id = get_container_id(f"{submission_id}-app:latest")
+        logs_path = generate_log(container_id)
+        insert_submission(submission_id, user_id, challenge_id, 0, passed_test_case_value, f"{logs_path}.log")
     else:
         insert_submission(submission_id, user_id, challenge_id, 1, passed_test_case_value)
     return
@@ -169,13 +209,15 @@ def build_and_run_docker(submission: Submission, destination_dir: str):
         except Exception as e:
             time.sleep(5)
     if not flag:
-        raise HTTPException(status_code=500, detail="The application did not start successfully")
+        container_id = get_container_id(f"{submission_id}-app:latest")
+        logs_path = generate_log(container_id)
+        insert_submission(submission_id, submission.user_id, submission.challenge_id, 0, 0, f"{logs_path}.log")
+        return
+        # raise HTTPException(status_code=500, detail="The application did not start successfully")
     
     # Run test cases on the application
     if flag:
         run_tests(submission, port)
-    else:
-        print("Application did not start successfully") # UPDATE HERE LATER (TODO)
 
     end_time = time.time()
     print(f"Execution duration: {end_time - start_time:.2f}s")
@@ -184,6 +226,10 @@ def build_and_run_docker(submission: Submission, destination_dir: str):
     docker.compose.down(volumes=True, quiet=True)
     if os.path.exists(destination_dir):
         shutil.rmtree(destination_dir)
+
+    # Delete the containers and images
+    delete_images_by_name(submission_id)
+    return
 
 @app.get("/")
 async def root():
