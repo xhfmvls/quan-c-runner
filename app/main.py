@@ -155,7 +155,7 @@ def run_tests(submission: Submission, port: int):
     passed_test_case = []
 
 
-    time.sleep(10)
+    time.sleep(30)
     for idx, test in enumerate(test_cases):
         checking_method = test['checking_method']
         # checking_method = response_based_check
