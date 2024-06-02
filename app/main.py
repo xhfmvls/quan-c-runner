@@ -50,6 +50,11 @@ def delete_images_by_name(image_name):
         if f"{image_name}-db:latest" in image_tags:
             client.images.remove(image.id, force=True)
 
+def shut_container(docker: DockerClient, destination_dir: str):
+    docker.compose.down(volumes=True, quiet=True)
+    if os.path.exists(destination_dir):
+        shutil.rmtree(destination_dir)
+
 def get_container_port(container_id: str):
     client = docker.from_env()
     container = client.containers.get(container_id)
@@ -155,7 +160,7 @@ def run_tests(submission: Submission, port: int):
     passed_test_case = []
 
 
-    time.sleep(30)
+    # time.sleep(30) # Not needed because the compose would wait for database container to be ready
     for idx, test in enumerate(test_cases):
         checking_method = test['checking_method']
         # checking_method = response_based_check
@@ -212,6 +217,7 @@ def build_and_run_docker(submission: Submission, destination_dir: str):
         container_id = get_container_id(f"{submission_id}-app:latest")
         logs_path = generate_log(container_id)
         insert_submission(submission_id, submission.user_id, submission.challenge_id, 0, 0, f"{logs_path}.log")
+        shut_container(docker, destination_dir)
         return
         # raise HTTPException(status_code=500, detail="The application did not start successfully")
     
@@ -223,9 +229,7 @@ def build_and_run_docker(submission: Submission, destination_dir: str):
     print(f"Execution duration: {end_time - start_time:.2f}s")
 
     # Stop the container and remove the volume
-    docker.compose.down(volumes=True, quiet=True)
-    if os.path.exists(destination_dir):
-        shutil.rmtree(destination_dir)
+    shut_container(docker, destination_dir)
 
     # Delete the containers and images
     delete_images_by_name(submission_id)
