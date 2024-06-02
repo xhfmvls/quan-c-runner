@@ -239,6 +239,10 @@ def build_and_run_docker(submission: Submission, destination_dir: str):
 async def root():
     return {"message": "Hello World"}
 
+@app.delete("/cancel-submission")
+async def cancel_submission(submission_id: str):
+    pass
+
 @app.post("/create-submission")
 async def create_submission(
     id: str = Form(...),
@@ -288,6 +292,6 @@ async def create_submission(
         build_and_run_docker, submission, destination_dir
     )
 
-    return {"message": "Submission creation started"}
+    return {"message": "Submission creation started", "submission_id": submission_id}
 
 # uvicorn app.main:app --port 8080
