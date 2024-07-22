@@ -59,9 +59,7 @@ def get_container_port(container_id: str):
     client = docker.from_env()
     container = client.containers.get(container_id)
     ports = container.attrs["NetworkSettings"]["Ports"]
-    print(ports)
     for port_info, _ in ports.items():
-        print(port_info)
         # port = port_info.split("/")[0]
         if port_info == '8080/tcp':
             host_port = ports[port_info][0]["HostPort"]
