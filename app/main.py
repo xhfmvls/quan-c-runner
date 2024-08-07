@@ -15,16 +15,6 @@ import pymysql
 from dotenv import load_dotenv
 import hashlib
 
-'''
-TODO:
-- ✅ buat mekanisme update app.js / main.py / dll (yang gw kepikiran sekarang kita buat .txt yang isinya nama file yang perlu diganti (pake txt aja biar kita nga perlu buat kolom baru di ERD :) ))
-- ✅ jalanin testing payload
-- ✅ ngitung performance (waktu build n testing)
-- ✅ buat async sehingga bisa sekaligus beberapa (ini rada low prioritynya, karna yang penting adalah functionallity nya jalan dulu)
-- ✅ store log file
-- endpoint return log files dari specific user
-'''
-
 load_dotenv()
 MYSQL_HOST = os.getenv('MYSQL_HOST')
 MYSQL_USER = os.getenv('MYSQL_USER')
